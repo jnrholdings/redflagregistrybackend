@@ -1,0 +1,156 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template for API Gateway with Lambda integrations, IAM permissions, DynamoDB table, and existing S3 bucket with versioning enabled
+Parameters:
+  S3BucketName:
+    Type: String
+    Description: Name of the existing S3 bucket storing Lambda code
+  S3KeyPrefix:
+    Type: String
+    Description: Folder path in the existing S3 bucket where Lambda code is stored
+  DynamoDBTableName:
+    Type: String
+    Description: Name of the DynamoDB table
+Resources:
+  S3BucketVersioning:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref S3BucketName
+      VersioningConfiguration:
+        Status: Enabled
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: LambdaExecutionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaDynamoS3Policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:*
+                  - s3:*
+                Resource: '*'
+  AddClientLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: AddClientFunction
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: nodejs18.x
+      Environment:
+        Variables:
+          DYNAMODB_TABLE: !Ref DynamoDBTableName
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Sub "${S3KeyPrefix}/addClient.zip"
+        CodeSha256: !Sub "${S3KeyPrefix}/addClient.zip.sha256"
+  DeleteClientLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: DeleteClientFunction
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: nodejs18.x
+      Environment:
+        Variables:
+          DYNAMODB_TABLE: !Ref DynamoDBTableName
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Sub "${S3KeyPrefix}/deleteClient.zip"
+        CodeSha256: !Sub "${S3KeyPrefix}/deleteClient.zip.sha256"
+  GetClientLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: GetClientFunction
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: nodejs18.x
+      Environment:
+        Variables:
+          DYNAMODB_TABLE: !Ref DynamoDBTableName
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Sub "${S3KeyPrefix}/getClient.zip"
+        CodeSha256: !Sub "${S3KeyPrefix}/getClient.zip.sha256"
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: ClientApi
+  ApiResourceManageClients:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: manageclients
+      RestApiId: !Ref ApiGateway
+  AddClientMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiResourceManageClients
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri: !Sub
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+          - { LambdaArn: !GetAtt AddClientLambda.Arn }
+  DeleteClientMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiResourceManageClients
+      HttpMethod: DELETE
+      AuthorizationType: NONE
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri: !Sub
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+          - { LambdaArn: !GetAtt DeleteClientLambda.Arn }
+  GetClientMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiResourceManageClients
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri: !Sub
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+          - { LambdaArn: !GetAtt GetClientLambda.Arn }
+  LambdaInvokePermissionAdd:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt AddClientLambda.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+  LambdaInvokePermissionDelete:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt DeleteClientLambda.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+  LambdaInvokePermissionGet:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt GetClientLambda.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+Outputs:
+  ApiGatewayEndpoint:
+    Description: "Endpoint URL for Client API"
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod/manageclients"
+  S3BucketName:
+    Description: "S3 Bucket storing Lambda code with versioning enabled"
+    Value: !Ref S3BucketName

@@ -1,0 +1,105 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: DynamoDB Single Table for User and Client Data
+
+Resources:
+  UserDataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: UserData
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+        - AttributeName: GSI2PK
+          AttributeType: S
+        - AttributeName: GSI2SK
+          AttributeType: S
+        - AttributeName: GSI3PK
+          AttributeType: S
+        - AttributeName: GSI3SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      ProvisionedThroughput: # Adjust as needed
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      GlobalSecondaryIndexes:
+        - IndexName: NameIndex
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection: # Include only necessary attributes for read performance
+            ProjectionType: ALL
+          ProvisionedThroughput: # Adjust as needed
+            ReadCapacityUnits: 5
+            WriteCapacityUnits: 5
+        - IndexName: PhoneIndex
+          KeySchema:
+            - AttributeName: GSI2PK
+              KeyType: HASH
+            - AttributeName: GSI2SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+          ProvisionedThroughput: # Adjust as needed
+            ReadCapacityUnits: 5
+            WriteCapacityUnits: 5
+        - IndexName: UsernameIndex
+          KeySchema:
+            - AttributeName: GSI3PK
+              KeyType: HASH
+            - AttributeName: GSI3SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+          ProvisionedThroughput: # Adjust as needed
+            ReadCapacityUnits: 5
+            WriteCapacityUnits: 5
+        # - IndexName: PaymentStatusIndex THese indexes will be added in the future
+        #   KeySchema:
+        #     - AttributeName: GSI4PK
+        #       KeyType: HASH
+        #     - AttributeName: GSI4SK
+        #       KeyType: RANGE
+        #   Projection:
+        #     ProjectionType: ALL # Or INCLUDE with necessary attributes
+        #   ProvisionedThroughput: # Adjust as needed
+        #     ReadCapacityUnits: 5
+        #     WriteCapacityUnits: 5
+        # - IndexName: ActiveStatusIndex
+        #   KeySchema:
+        #     - AttributeName: GSI5PK
+        #       KeyType: HASH
+        #     - AttributeName: GSI5SK
+        #       KeyType: RANGE
+        #   Projection:
+        #     ProjectionType: ALL # Or INCLUDE
+        #   ProvisionedThroughput: # Adjust as needed
+        #     ReadCapacityUnits: 5
+        #     WriteCapacityUnits: 5
+        # - IndexName: PaymentDateIndex
+        #   KeySchema:
+        #     - AttributeName: GSI6PK
+        #       KeyType: HASH
+        #     - AttributeName: GSI6SK
+        #       KeyType: RANGE
+        #   Projection:
+        #     ProjectionType: ALL # Or INCLUDE
+        #   ProvisionedThroughput: # Adjust as needed
+        #     ReadCapacityUnits: 5
+        #     WriteCapacityUnits: 5
+Outputs:
+  TableName:
+    Value: !Ref UserDataTable
+  TableArn:
+    Value: !GetAtt UserDataTable.Arn

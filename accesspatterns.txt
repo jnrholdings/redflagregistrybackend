@@ -1,0 +1,9 @@
+I need to design a dynamodb table these are the access patterns 
+I want to get individual clients by email,phone, name or username
+I want to add individual clients with attributes PhoneNumber,Name,Age,Repeat,Offender,Time Waster, image location, refrencdid
+I want to bulk upload clients 
+I want to to add users with attributes name, email, username, phone number, payment status, admin status, active status,paymentdate, number of active days remaining
+I want to get list of users back by email,phone, name,username,payment status, admin status, active status,paymentdate, number of active days remaining
+I want to bulk upload thoughts of the day with thought, displayed (yes or no)
+I want to get a thought every day which has not been uploaded
+I want to upload individual thoughts of the day
