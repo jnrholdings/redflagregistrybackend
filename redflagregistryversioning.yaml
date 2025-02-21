@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: CloudFormation template for API Gateway with Lambda integrations, IAM permissions, DynamoDB table, and existing S3 bucket with versioning enabled
+Description: CloudFormation template for API Gateway with Cognito authentication, Lambda integrations, IAM permissions, and existing S3 bucket storing Lambda code with versioning
 Parameters:
   S3BucketName:
     Type: String
@@ -9,14 +9,20 @@ Parameters:
     Description: Folder path in the existing S3 bucket where Lambda code is stored
   DynamoDBTableName:
     Type: String
-    Description: Name of the DynamoDB table
+    Description: Name of the existing DynamoDB table
+  CognitoUserPoolId:
+    Type: String
+    Description: ID of the Cognito User Pool for API access restriction
+  Stage:
+    Type: String
+    Description: Deployment stage for the API (e.g., dev, prod)
 Resources:
-  S3BucketVersioning:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Ref S3BucketName
-      VersioningConfiguration:
-        Status: Enabled
+  # S3Bucket:
+  #   Type: AWS::S3::Bucket
+  #   Properties:
+  #     BucketName: !Ref S3BucketName
+  #     VersioningConfiguration:
+  #       Status: Enabled
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -47,11 +53,11 @@ Resources:
       Runtime: nodejs18.x
       Environment:
         Variables:
-          DYNAMODB_TABLE: !Ref DynamoDBTableName
+          DYNAMODB_TABLE_NAME: !Ref DynamoDBTableName
       Code:
         S3Bucket: !Ref S3BucketName
         S3Key: !Sub "${S3KeyPrefix}/addClient.zip"
-        CodeSha256: !Sub "${S3KeyPrefix}/addClient.zip.sha256"
+        S3ObjectVersion: "khMqEMEP2d6QnU6pYfifrU9Y9vDK6MjL"
   DeleteClientLambda:
     Type: AWS::Lambda::Function
     Properties:
@@ -61,11 +67,11 @@ Resources:
       Runtime: nodejs18.x
       Environment:
         Variables:
-          DYNAMODB_TABLE: !Ref DynamoDBTableName
+          DYNAMODB_TABLE_NAME: !Ref DynamoDBTableName
       Code:
         S3Bucket: !Ref S3BucketName
         S3Key: !Sub "${S3KeyPrefix}/deleteClient.zip"
-        CodeSha256: !Sub "${S3KeyPrefix}/deleteClient.zip.sha256"
+        S3ObjectVersion: "r0By4a258lwfWJV1haN81AmXlee0aRkz"
   GetClientLambda:
     Type: AWS::Lambda::Function
     Properties:
@@ -75,21 +81,39 @@ Resources:
       Runtime: nodejs18.x
       Environment:
         Variables:
-          DYNAMODB_TABLE: !Ref DynamoDBTableName
+          DYNAMODB_TABLE_NAME: !Ref DynamoDBTableName
       Code:
         S3Bucket: !Ref S3BucketName
         S3Key: !Sub "${S3KeyPrefix}/getClient.zip"
-        CodeSha256: !Sub "${S3KeyPrefix}/getClient.zip.sha256"
+        S3ObjectVersion: "Z.GpLec47hSPmRpYslVlZI91KZvy_HTS"
   ApiGateway:
     Type: AWS::ApiGateway::RestApi
     Properties:
       Name: ClientApi
+  CognitoAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: CognitoAuthorizer
+      Type: COGNITO_USER_POOLS
+      RestApiId: !Ref ApiGateway
+      IdentitySource: method.request.header.Authorization
+      ProviderARNs:
+        - !Sub arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${CognitoUserPoolId}
   ApiResourceManageClients:
     Type: AWS::ApiGateway::Resource
     Properties:
       ParentId: !GetAtt ApiGateway.RootResourceId
       PathPart: manageclients
       RestApiId: !Ref ApiGateway
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - AddClientMethod
+      - DeleteClientMethod
+      - GetClientMethod
+    Properties:
+      RestApiId: !Ref ApiGateway
+      StageName: !Ref Stage
   AddClientMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -97,12 +121,12 @@ Resources:
       ResourceId: !Ref ApiResourceManageClients
       HttpMethod: POST
       AuthorizationType: NONE
+      # AuthorizationType: COGNITO_USER_POOLS
+      # AuthorizerId: !Ref CognitoAuthorizer
       Integration:
         IntegrationHttpMethod: POST
         Type: AWS_PROXY
-        Uri: !Sub
-          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
-          - { LambdaArn: !GetAtt AddClientLambda.Arn }
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AddClientLambda.Arn}/invocations
   DeleteClientMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -110,12 +134,12 @@ Resources:
       ResourceId: !Ref ApiResourceManageClients
       HttpMethod: DELETE
       AuthorizationType: NONE
+      # AuthorizationType: COGNITO_USER_POOLS
+      # AuthorizerId: !Ref CognitoAuthorizer
       Integration:
         IntegrationHttpMethod: POST
         Type: AWS_PROXY
-        Uri: !Sub
-          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
-          - { LambdaArn: !GetAtt DeleteClientLambda.Arn }
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DeleteClientLambda.Arn}/invocations
   GetClientMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -123,12 +147,31 @@ Resources:
       ResourceId: !Ref ApiResourceManageClients
       HttpMethod: GET
       AuthorizationType: NONE
+      # AuthorizationType: COGNITO_USER_POOLS
+      # AuthorizerId: !Ref CognitoAuthorizer
       Integration:
         IntegrationHttpMethod: POST
         Type: AWS_PROXY
-        Uri: !Sub
-          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
-          - { LambdaArn: !GetAtt GetClientLambda.Arn }
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetClientLambda.Arn}/invocations
+  OptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: OPTIONS
+      ResourceId: !Ref ApiResourceManageClients
+      RestApiId: !Ref ApiGateway
+      Integration:
+        IntegrationHttpMethod: OPTIONS
+        Type: MOCK
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: "'*'"
+            method.response.header.Access-Control-Allow-Methods: "'GET, POST, DELETE, OPTIONS'"
+            method.response.header.Access-Control-Allow-Headers: "'Content-Type, Authorization'"
   LambdaInvokePermissionAdd:
     Type: AWS::Lambda::Permission
     Properties:
@@ -152,5 +195,8 @@ Outputs:
     Description: "Endpoint URL for Client API"
     Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod/manageclients"
   S3BucketName:
-    Description: "S3 Bucket storing Lambda code with versioning enabled"
+    Description: "S3 Bucket storing Lambda code"
     Value: !Ref S3BucketName
+  DynamoDBTableName:
+    Description: "DynamoDB table used by Lambda functions"
+    Value: !Ref DynamoDBTableName
