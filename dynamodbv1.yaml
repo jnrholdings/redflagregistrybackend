@@ -6,6 +6,7 @@ Resources:
     Type: AWS::DynamoDB::Table
     Properties:
       TableName: UserData
+      BillingMode: PAY_PER_REQUEST  # On-demand capacity
       AttributeDefinitions:
         - AttributeName: PK
           AttributeType: S
@@ -28,9 +29,9 @@ Resources:
           KeyType: HASH
         - AttributeName: SK
           KeyType: RANGE
-      ProvisionedThroughput: # Adjust as needed
-        ReadCapacityUnits: 5
-        WriteCapacityUnits: 5
+      # ProvisionedThroughput: # Adjust as needed
+      #   ReadCapacityUnits: 5
+      #   WriteCapacityUnits: 5
       GlobalSecondaryIndexes:
         - IndexName: NameIndex
           KeySchema:
@@ -40,9 +41,9 @@ Resources:
               KeyType: RANGE
           Projection: # Include only necessary attributes for read performance
             ProjectionType: ALL
-          ProvisionedThroughput: # Adjust as needed
-            ReadCapacityUnits: 5
-            WriteCapacityUnits: 5
+          # ProvisionedThroughput: # Adjust as needed
+          #   ReadCapacityUnits: 5
+          #   WriteCapacityUnits: 5
         - IndexName: PhoneIndex
           KeySchema:
             - AttributeName: GSI2PK
@@ -51,9 +52,9 @@ Resources:
               KeyType: RANGE
           Projection:
             ProjectionType: ALL
-          ProvisionedThroughput: # Adjust as needed
-            ReadCapacityUnits: 5
-            WriteCapacityUnits: 5
+          # ProvisionedThroughput: # Adjust as needed
+          #   ReadCapacityUnits: 5
+          #   WriteCapacityUnits: 5
         - IndexName: UsernameIndex
           KeySchema:
             - AttributeName: GSI3PK
@@ -62,9 +63,9 @@ Resources:
               KeyType: RANGE
           Projection:
             ProjectionType: ALL
-          ProvisionedThroughput: # Adjust as needed
-            ReadCapacityUnits: 5
-            WriteCapacityUnits: 5
+          # ProvisionedThroughput: # Adjust as needed
+          #   ReadCapacityUnits: 5
+          #   WriteCapacityUnits: 5
         # - IndexName: PaymentStatusIndex THese indexes will be added in the future
         #   KeySchema:
         #     - AttributeName: GSI4PK

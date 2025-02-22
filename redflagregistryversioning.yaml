@@ -1,4 +1,4 @@
-AWSTemplateFormatVersion: '2010-09-09'
+AWSTemplateFormatVersion: "2010-09-09"
 Description: CloudFormation template for API Gateway with Cognito authentication, Lambda integrations, IAM permissions, and existing S3 bucket storing Lambda code with versioning
 Parameters:
   S3BucketName:
@@ -16,39 +16,43 @@ Parameters:
   Stage:
     Type: String
     Description: Deployment stage for the API (e.g., dev, prod)
-Resources:
-  # S3Bucket:
-  #   Type: AWS::S3::Bucket
-  #   Properties:
-  #     BucketName: !Ref S3BucketName
-  #     VersioningConfiguration:
-  #       Status: Enabled
+Resources:  
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: LambdaExecutionRole
+      RoleName: !Sub "${AWS::StackName}-LambdaExecutionRole"
       AssumeRolePolicyDocument:
-        Version: '2012-10-17'
+        Version: "2012-10-17"
         Statement:
           - Effect: Allow
             Principal:
               Service: lambda.amazonaws.com
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: LambdaDynamoS3Policy
+        - PolicyName: LambdaDynamoS3CloudWatchPolicy
           PolicyDocument:
-            Version: '2012-10-17'
+            Version: "2012-10-17"
             Statement:
+              - Effect: Allow
+                Action:
+                - lambda:InvokeFunction  # This grants permission to API Gateway to invoke the Lambda function
+                Resource: "*"
               - Effect: Allow
                 Action:
                   - dynamodb:*
                   - s3:*
-                Resource: '*'
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "arn:aws:logs:*:*:*"
   AddClientLambda:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: AddClientFunction
-      Handler: index.handler
+      Handler: addClient.handler
       Role: !GetAtt LambdaExecutionRole.Arn
       Runtime: nodejs18.x
       Environment:
@@ -62,7 +66,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: DeleteClientFunction
-      Handler: index.handler
+      Handler: deleteClient.handler
       Role: !GetAtt LambdaExecutionRole.Arn
       Runtime: nodejs18.x
       Environment:
@@ -76,7 +80,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: GetClientFunction
-      Handler: index.handler
+      Handler: getClient.handler
       Role: !GetAtt LambdaExecutionRole.Arn
       Runtime: nodejs18.x
       Environment:
@@ -86,7 +90,21 @@ Resources:
         S3Bucket: !Ref S3BucketName
         S3Key: !Sub "${S3KeyPrefix}/getClient.zip"
         S3ObjectVersion: "Z.GpLec47hSPmRpYslVlZI91KZvy_HTS"
-  ApiGateway:
+  BulkUploadClientLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: BulkUploadClientFunction
+      Handler: bulkUploadClient.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: nodejs18.x
+      Environment:
+        Variables:
+          DYNAMODB_TABLE_NAME: !Ref DynamoDBTableName
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Sub "${S3KeyPrefix}/bulkUploadClient.zip"
+        S3ObjectVersion: "blXCm9n6hwsHWVIc1xjp2YUuu7syNU5K"
+  RedFlagApi:
     Type: AWS::ApiGateway::RestApi
     Properties:
       Name: ClientApi
@@ -95,30 +113,55 @@ Resources:
     Properties:
       Name: CognitoAuthorizer
       Type: COGNITO_USER_POOLS
-      RestApiId: !Ref ApiGateway
+      RestApiId: !Ref RedFlagApi
       IdentitySource: method.request.header.Authorization
       ProviderARNs:
         - !Sub arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${CognitoUserPoolId}
   ApiResourceManageClients:
     Type: AWS::ApiGateway::Resource
     Properties:
-      ParentId: !GetAtt ApiGateway.RootResourceId
+      ParentId: !GetAtt RedFlagApi.RootResourceId
       PathPart: manageclients
-      RestApiId: !Ref ApiGateway
+      RestApiId: !Ref RedFlagApi
+  ApiResourceClient:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !Ref ApiResourceManageClients
+      PathPart: client
+      RestApiId: !Ref RedFlagApi
+  # ApiResourceClientId:
+  #   Type: AWS::ApiGateway::Resource
+  #   Properties:
+  #     ParentId: !Ref ApiResourceClient
+  #     PathPart: "{clientId}"
+  #     RestApiId: !Ref ApiGateway
+  ApiResourceSearch: # New resource for search operations
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !Ref ApiResourceClient
+      PathPart: "{searchby}"
+      RestApiId: !Ref RedFlagApi
+  ApiResourceBulkUpload:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !Ref ApiResourceManageClients
+      PathPart: clients
+      RestApiId: !Ref RedFlagApi
   ApiDeployment:
     Type: AWS::ApiGateway::Deployment
     DependsOn:
       - AddClientMethod
       - DeleteClientMethod
       - GetClientMethod
+      - BulkUploadClientMethod
     Properties:
-      RestApiId: !Ref ApiGateway
+      RestApiId: !Ref RedFlagApi
       StageName: !Ref Stage
   AddClientMethod:
     Type: AWS::ApiGateway::Method
     Properties:
-      RestApiId: !Ref ApiGateway
-      ResourceId: !Ref ApiResourceManageClients
+      RestApiId: !Ref RedFlagApi
+      ResourceId: !Ref ApiResourceClient
       HttpMethod: POST
       AuthorizationType: NONE
       # AuthorizationType: COGNITO_USER_POOLS
@@ -127,24 +170,36 @@ Resources:
         IntegrationHttpMethod: POST
         Type: AWS_PROXY
         Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AddClientLambda.Arn}/invocations
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: "'*'"
+            method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+            method.response.header.Access-Control-Allow-Headers: "'Content-Type, Authorization'"
   DeleteClientMethod:
     Type: AWS::ApiGateway::Method
     Properties:
-      RestApiId: !Ref ApiGateway
-      ResourceId: !Ref ApiResourceManageClients
+      RestApiId: !Ref RedFlagApi
+      ResourceId: !Ref ApiResourceClient
       HttpMethod: DELETE
       AuthorizationType: NONE
       # AuthorizationType: COGNITO_USER_POOLS
       # AuthorizerId: !Ref CognitoAuthorizer
       Integration:
-        IntegrationHttpMethod: POST
+        IntegrationHttpMethod: DELETE
         Type: AWS_PROXY
         Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DeleteClientLambda.Arn}/invocations
-  GetClientMethod:
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: "'*'"
+            method.response.header.Access-Control-Allow-Methods: "'DELETE, OPTIONS'"
+            method.response.header.Access-Control-Allow-Headers: "'Content-Type, Authorization'"
+  GetClientMethod: # Method for /manageclients/search/{searchby}/{attrId}
     Type: AWS::ApiGateway::Method
     Properties:
-      RestApiId: !Ref ApiGateway
-      ResourceId: !Ref ApiResourceManageClients
+      RestApiId: !Ref RedFlagApi
+      ResourceId: !Ref ApiResourceSearch
       HttpMethod: GET
       AuthorizationType: NONE
       # AuthorizationType: COGNITO_USER_POOLS
@@ -153,13 +208,39 @@ Resources:
         IntegrationHttpMethod: POST
         Type: AWS_PROXY
         Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetClientLambda.Arn}/invocations
-  OptionsMethod:
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: "'*'"
+            method.response.header.Access-Control-Allow-Methods: "'GET, OPTIONS'"
+            method.response.header.Access-Control-Allow-Headers: "'Content-Type, Authorization'"
+  BulkUploadClientMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RedFlagApi
+      ResourceId: !Ref ApiResourceBulkUpload
+      HttpMethod: POST
+      AuthorizationType: NONE
+      # AuthorizationType: COGNITO_USER_POOLS
+      # AuthorizerId: !Ref CognitoAuthorizer
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BulkUploadClientLambda.Arn}/invocations
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: "'*'"
+            method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+            method.response.header.Access-Control-Allow-Headers: "'Content-Type, Authorization'"
+  # OPTIONS Method for /client
+  OptionsMethodClient:
     Type: AWS::ApiGateway::Method
     Properties:
       AuthorizationType: NONE
       HttpMethod: OPTIONS
-      ResourceId: !Ref ApiResourceManageClients
-      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiResourceClient
+      RestApiId: !Ref RedFlagApi
       Integration:
         IntegrationHttpMethod: OPTIONS
         Type: MOCK
@@ -172,31 +253,109 @@ Resources:
             method.response.header.Access-Control-Allow-Origin: "'*'"
             method.response.header.Access-Control-Allow-Methods: "'GET, POST, DELETE, OPTIONS'"
             method.response.header.Access-Control-Allow-Headers: "'Content-Type, Authorization'"
+  # OPTIONS Method for /search
+  OptionsMethodClientId:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: OPTIONS
+      ResourceId: !Ref ApiResourceSearch
+      RestApiId: !Ref RedFlagApi
+      Integration:
+        IntegrationHttpMethod: OPTIONS
+        Type: MOCK
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: "'*'"
+            method.response.header.Access-Control-Allow-Methods: "'GET, OPTIONS'"
+            method.response.header.Access-Control-Allow-Headers: "'Content-Type, Authorization'"
+  # OPTIONS Method for /clients/bulk
+  OptionsMethodBulk:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: OPTIONS
+      ResourceId: !Ref ApiResourceBulkUpload
+      RestApiId: !Ref RedFlagApi
+      Integration:
+        IntegrationHttpMethod: OPTIONS
+        Type: MOCK
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: "'*'"
+            method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+            method.response.header.Access-Control-Allow-Headers: "'Content-Type, Authorization'"
   LambdaInvokePermissionAdd:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !GetAtt AddClientLambda.Arn
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RedFlagApi}/*/*/*'
   LambdaInvokePermissionDelete:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !GetAtt DeleteClientLambda.Arn
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RedFlagApi}/*/*/*'
   LambdaInvokePermissionGet:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !GetAtt GetClientLambda.Arn
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
-Outputs:
-  ApiGatewayEndpoint:
-    Description: "Endpoint URL for Client API"
-    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod/manageclients"
-  S3BucketName:
-    Description: "S3 Bucket storing Lambda code"
-    Value: !Ref S3BucketName
-  DynamoDBTableName:
-    Description: "DynamoDB table used by Lambda functions"
-    Value: !Ref DynamoDBTableName
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RedFlagApi}/*/*/*'
+  LambdaInvokePermissionBulkUpload:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt BulkUploadClientLambda.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RedFlagApi}/*/*/*'
+  # LambdaApiGatewayInvokePermissionAdd:
+  #   Type: 'AWS::Lambda::Permission'
+  #   Properties:
+  #     FunctionName: !Ref AddClientLambda
+  #     Action: 'lambda:InvokeFunction'
+  #     Principal: 'apigateway.amazonaws.com'
+  #     SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RedFlagApi}/*'
+  # LambdaApiGatewayInvokePermissionDelete:
+  #     Type: 'AWS::Lambda::Permission'
+  #     Properties:
+  #       FunctionName: !Ref DeleteClientLambda
+  #       Action: 'lambda:InvokeFunction'
+  #       Principal: 'apigateway.amazonaws.com'
+  #       SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*'
+  # LambdaApiGatewayInvokePermissionGet:
+  #     Type: 'AWS::Lambda::Permission'
+  #     Properties:
+  #       FunctionName: !Ref GetClientLambda
+  #       Action: 'lambda:InvokeFunction'
+  #       Principal: 'apigateway.amazonaws.com'
+  #       SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*'
+  # LambdaApiGatewayInvokePermissionBulkUpload:
+  #     Type: 'AWS::Lambda::Permission'
+  #     Properties:
+  #       FunctionName: !Ref BulkUploadClientLambda
+  #       Action: 'lambda:InvokeFunction'
+  #       Principal: 'apigateway.amazonaws.com'
+  #       SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*'
+# Outputs:
+#   ApiGatewayEndpoint:
+#     Description: "Endpoint URL for Client API"
+#     Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/manageclients/client"
+#   S3BucketName:
+#     Description: "S3 Bucket storing Lambda code"
+#     Value: !Ref S3BucketName
+#   DynamoDBTableName:
+#     Description: "DynamoDB table used by Lambda functions"
+#     Value: !Ref DynamoDBTableName
